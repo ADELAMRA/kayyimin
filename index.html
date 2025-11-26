@@ -431,6 +431,7 @@
             });
 
             try {
+                // تحديث البيانات محلياً أولاً
                 const rowIndex = allData.findIndex(item => item._row == currentEditingRow || allData.indexOf(item) === currentEditingRow);
                 
                 if (rowIndex !== -1) {
@@ -438,62 +439,139 @@
                     filteredData = [...allData];
                     renderTable();
                     
-                    const syncResult = await syncWithServer('update', currentEditingRow, updatedData);
+                    // إرسال التحديثات إلى الخادم - الإصلاح هنا
+                    const syncResult = await syncWithServer(currentEditingRow, updatedData);
                     
                     if (syncResult.success) {
-                        updateStatus('تم حفظ التعديلات بنجاح');
+                        updateStatus('تم حفظ التعديلات ومزامنتها مع الجدول بنجاح ✓');
                     } else {
-                        updateStatus('تم الحفظ محلياً');
+                        updateStatus('⚠️ تم الحفظ محلياً ولكن هناك مشكلة في المزامنة مع الجدول');
+                        console.error('خطأ المزامنة:', syncResult.error);
                     }
                 }
 
                 closeEditModal();
                 
             } catch (error) {
-                updateStatus('خطأ في حفظ التعديلات');
+                updateStatus('❌ خطأ في حفظ التعديلات');
+                console.error('خطأ الحفظ:', error);
             }
         }
 
-        async function syncWithServer(action, rowId, data = null) {
+        // دالة المزامنة المحسنة
+        async function syncWithServer(rowId, data) {
             try {
-                const payload = { action: action, row: rowId };
-                if (data) payload.data = data;
-
+                console.log('بدء المزامنة مع الخادم...', { rowId, data });
+                
+                // إرسال البيانات إلى Google Apps Script
                 const response = await fetch(API_URL, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        action: 'update',
+                        row: rowId,
+                        data: data
+                    })
                 });
-                
-                if (!response.ok) throw new Error(`خطأ: ${response.status}`);
-                
+
+                console.log('استجابة الخادم:', response);
+
+                if (!response.ok) {
+                    throw new Error(`خطأ في الاستجابة: ${response.status} ${response.statusText}`);
+                }
+
                 const result = await response.json();
-                return { success: true, data: result };
+                console.log('نتيجة المزامنة:', result);
+
+                if (result && result.success) {
+                    return { success: true, data: result };
+                } else {
+                    throw new Error(result?.message || 'فشل في تحديث الجدول');
+                }
                 
             } catch (error) {
-                return { success: false, error: error.message };
+                console.error('❌ خطأ في المزامنة:', error);
+                return { 
+                    success: false, 
+                    error: error.message 
+                };
+            }
+        }
+
+        // دالة حذف محسنة
+        async function deleteRow(rowId) {
+            if (!confirm('هل أنت متأكد من رغبتك في حذف هذا السجل؟')) return;
+
+            try {
+                // حفظ البيانات قبل الحذف
+                const rowToDelete = allData.find(item => item._row == rowId || allData.indexOf(item) === rowId);
+                
+                // الحذف محلياً أولاً
+                allData = allData.filter(item => !(item._row == rowId || allData.indexOf(item) === rowId));
+                filteredData = [...allData];
+                renderTable();
+
+                // محاولة المزامنة مع الخادم
+                const syncResult = await syncDeleteWithServer(rowId);
+                
+                if (syncResult.success) {
+                    updateStatus('تم حذف السجل ومزامنته مع الجدول بنجاح ✓');
+                } else {
+                    updateStatus('⚠️ تم الحذف محلياً ولكن هناك مشكلة في المزامنة مع الجدول');
+                    // استعادة البيانات في حالة فشل المزامنة
+                    allData.push(rowToDelete);
+                    filteredData = [...allData];
+                    renderTable();
+                }
+                
+            } catch (error) {
+                updateStatus('❌ خطأ في حذف السجل');
+                console.error('خطأ الحذف:', error);
+            }
+        }
+
+        // دالة حذف محسنة
+        async function syncDeleteWithServer(rowId) {
+            try {
+                console.log('بدء حذف من الخادم...', { rowId });
+                
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        action: 'delete',
+                        row: rowId
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`خطأ في الاستجابة: ${response.status}`);
+                }
+
+                const result = await response.json();
+                
+                if (result && result.success) {
+                    return { success: true, data: result };
+                } else {
+                    throw new Error(result?.message || 'فشل في حذف السجل من الجدول');
+                }
+                
+            } catch (error) {
+                console.error('❌ خطأ في حذف الخادم:', error);
+                return { 
+                    success: false, 
+                    error: error.message 
+                };
             }
         }
 
         function closeEditModal() {
             document.getElementById('editModal').style.display = 'none';
             currentEditingRow = null;
-        }
-
-        async function deleteRow(rowId) {
-            if (!confirm('هل أنت متأكد من الحذف؟')) return;
-
-            try {
-                allData = allData.filter(item => !(item._row == rowId || allData.indexOf(item) === rowId));
-                filteredData = [...allData];
-                renderTable();
-
-                await syncWithServer('delete', rowId);
-                updateStatus('تم حذف السجل بنجاح');
-                
-            } catch (error) {
-                updateStatus('خطأ في حذف السجل');
-            }
         }
 
         function searchData() {
@@ -508,24 +586,26 @@
 
         async function loadRealData() {
             try {
-                updateStatus('جاري تحميل البيانات...');
+                updateStatus('جاري تحميل البيانات من الجدول...');
                 const response = await fetch(API_URL + '?t=' + Date.now());
                 
-                if (!response.ok) throw new Error(`خطأ: ${response.status}`);
+                if (!response.ok) throw new Error(`خطأ في الاتصال: ${response.status}`);
                 
                 const data = await response.json();
+                console.log('البيانات المستلمة:', data);
                 
                 if (data && Array.isArray(data) && data.length > 0) {
                     allData = data;
                     filteredData = [...data];
-                    updateStatus(`تم تحميل ${data.length} سجل`);
+                    updateStatus(`تم تحميل ${data.length} سجل بنجاح من الجدول ✓`);
                     renderTable();
                 } else {
-                    throw new Error('لا توجد بيانات');
+                    throw new Error('لا توجد بيانات في الجدول');
                 }
                 
             } catch (error) {
-                updateStatus(`خطأ - استخدام بيانات تجريبية`);
+                console.error('❌ خطأ في جلب البيانات:', error);
+                updateStatus(`⚠️ ${error.message} - جاري استخدام بيانات تجريبية`);
                 allData = sampleData;
                 filteredData = [...sampleData];
                 renderTable();
@@ -535,7 +615,7 @@
         function useSampleData() {
             allData = sampleData;
             filteredData = [...sampleData];
-            updateStatus('تم تحميل البيانات التجريبية');
+            updateStatus('تم تحميل البيانات التجريبية - التعديلات لن تحفظ في الجدول');
             renderTable();
         }
 
