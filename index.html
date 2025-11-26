@@ -439,14 +439,14 @@
                     filteredData = [...allData];
                     renderTable();
                     
-                    // إرسال التحديثات إلى الخادم - الإصلاح هنا
-                    const syncResult = await syncWithServer(currentEditingRow, updatedData);
+                    // إرسال التحديثات إلى الخادم - الشكل الجديد
+                    const syncResult = await syncWithServer(currentEditingRow, updatedData, headers);
                     
                     if (syncResult.success) {
-                        updateStatus('تم حفظ التعديلات ومزامنتها مع الجدول بنجاح ✓');
+                        updateStatus('✅ تم حفظ التعديلات ومزامنتها مع الجدول بنجاح');
                     } else {
                         updateStatus('⚠️ تم الحفظ محلياً ولكن هناك مشكلة في المزامنة مع الجدول');
-                        console.error('خطأ المزامنة:', syncResult.error);
+                        console.error('تفاصيل الخطأ:', syncResult.error);
                     }
                 }
 
@@ -458,37 +458,56 @@
             }
         }
 
-        // دالة المزامنة المحسنة
-        async function syncWithServer(rowId, data) {
+        // دالة المزامنة المحسنة - الشكل الذي يتوقعه Google Apps Script
+        async function syncWithServer(rowId, data, headers) {
             try {
-                console.log('بدء المزامنة مع الخادم...', { rowId, data });
+                console.log('🔄 بدء المزامنة مع الخادم...', { rowId, data, headers });
                 
+                // تحويل البيانات إلى الشكل الذي يتوقعه Google Apps Script
+                const values = headers.map(header => data[header] || '');
+                
+                const payload = {
+                    action: 'update',
+                    row: parseInt(rowId), // تأكد من أن row رقم
+                    values: values
+                };
+
+                console.log('📤 إرسال البيانات:', payload);
+
                 // إرسال البيانات إلى Google Apps Script
                 const response = await fetch(API_URL, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
+                        'Content-Type': 'application/x-www-form-urlencoded',
                     },
-                    body: JSON.stringify({
-                        action: 'update',
-                        row: rowId,
-                        data: data
-                    })
+                    body: JSON.stringify(payload)
                 });
 
-                console.log('استجابة الخادم:', response);
+                console.log('📥 استجابة الخادم:', response);
 
                 if (!response.ok) {
                     throw new Error(`خطأ في الاستجابة: ${response.status} ${response.statusText}`);
                 }
 
-                const result = await response.json();
-                console.log('نتيجة المزامنة:', result);
+                const result = await response.text();
+                console.log('📄 نتيجة الخادم (نص):', result);
 
-                if (result && result.success) {
-                    return { success: true, data: result };
-                } else {
-                    throw new Error(result?.message || 'فشل في تحديث الجدول');
+                try {
+                    const jsonResult = JSON.parse(result);
+                    console.log('📊 نتيجة الخادم (JSON):', jsonResult);
+                    
+                    if (jsonResult && jsonResult.success) {
+                        return { success: true, data: jsonResult };
+                    } else {
+                        throw new Error(jsonResult?.message || 'فشل في تحديث الجدول');
+                    }
+                } catch (parseError) {
+                    // إذا لم يكن JSON، قد يكون نصاً عادياً
+                    if (result.includes('نجاح') || result.includes('success')) {
+                        return { success: true, data: result };
+                    } else {
+                        throw new Error(result || 'استجابة غير متوقعة من الخادم');
+                    }
                 }
                 
             } catch (error) {
@@ -517,9 +536,10 @@
                 const syncResult = await syncDeleteWithServer(rowId);
                 
                 if (syncResult.success) {
-                    updateStatus('تم حذف السجل ومزامنته مع الجدول بنجاح ✓');
+                    updateStatus('✅ تم حذف السجل ومزامنته مع الجدول بنجاح');
                 } else {
                     updateStatus('⚠️ تم الحذف محلياً ولكن هناك مشكلة في المزامنة مع الجدول');
+                    console.error('تفاصيل الخطأ:', syncResult.error);
                     // استعادة البيانات في حالة فشل المزامنة
                     allData.push(rowToDelete);
                     filteredData = [...allData];
@@ -535,29 +555,43 @@
         // دالة حذف محسنة
         async function syncDeleteWithServer(rowId) {
             try {
-                console.log('بدء حذف من الخادم...', { rowId });
+                console.log('🔄 بدء حذف من الخادم...', { rowId });
                 
+                const payload = {
+                    action: 'delete',
+                    row: parseInt(rowId)
+                };
+
                 const response = await fetch(API_URL, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
+                        'Content-Type': 'application/x-www-form-urlencoded',
                     },
-                    body: JSON.stringify({
-                        action: 'delete',
-                        row: rowId
-                    })
+                    body: JSON.stringify(payload)
                 });
+
+                console.log('📥 استجابة الحذف:', response);
 
                 if (!response.ok) {
                     throw new Error(`خطأ في الاستجابة: ${response.status}`);
                 }
 
-                const result = await response.json();
-                
-                if (result && result.success) {
-                    return { success: true, data: result };
-                } else {
-                    throw new Error(result?.message || 'فشل في حذف السجل من الجدول');
+                const result = await response.text();
+                console.log('📄 نتيجة الحذف:', result);
+
+                try {
+                    const jsonResult = JSON.parse(result);
+                    if (jsonResult && jsonResult.success) {
+                        return { success: true, data: jsonResult };
+                    } else {
+                        throw new Error(jsonResult?.message || 'فشل في حذف السجل من الجدول');
+                    }
+                } catch (parseError) {
+                    if (result.includes('نجاح') || result.includes('success') || result.includes('تم')) {
+                        return { success: true, data: result };
+                    } else {
+                        throw new Error(result || 'استجابة غير متوقعة من الخادم');
+                    }
                 }
                 
             } catch (error) {
@@ -586,18 +620,18 @@
 
         async function loadRealData() {
             try {
-                updateStatus('جاري تحميل البيانات من الجدول...');
+                updateStatus('🔄 جاري تحميل البيانات من الجدول...');
                 const response = await fetch(API_URL + '?t=' + Date.now());
                 
                 if (!response.ok) throw new Error(`خطأ في الاتصال: ${response.status}`);
                 
                 const data = await response.json();
-                console.log('البيانات المستلمة:', data);
+                console.log('📊 البيانات المستلمة:', data);
                 
                 if (data && Array.isArray(data) && data.length > 0) {
                     allData = data;
                     filteredData = [...data];
-                    updateStatus(`تم تحميل ${data.length} سجل بنجاح من الجدول ✓`);
+                    updateStatus(`✅ تم تحميل ${data.length} سجل بنجاح من الجدول`);
                     renderTable();
                 } else {
                     throw new Error('لا توجد بيانات في الجدول');
@@ -615,7 +649,7 @@
         function useSampleData() {
             allData = sampleData;
             filteredData = [...sampleData];
-            updateStatus('تم تحميل البيانات التجريبية - التعديلات لن تحفظ في الجدول');
+            updateStatus('📋 تم تحميل البيانات التجريبية - التعديلات لن تحفظ في الجدول');
             renderTable();
         }
 
